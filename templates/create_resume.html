@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create ATS-Friendly Resume</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f9;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 50px auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            text-align: center;
+            color: #00796b;
+        }
+
+        form {
+            display: flex;
+            flex-direction: column;
+        }
+
+        label {
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+
+        input, textarea {
+            padding: 10px;
+            margin-bottom: 15px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+
+        button {
+            padding: 10px;
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        button:hover {
+            background-color: #005a4f;
+        }
+
+        .popup {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            text-align: center;
+            z-index: 1000;
+        }
+
+        .popup button {
+            margin-top: 10px;
+        }
+
+        .overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 999;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Create ATS-Friendly Resume</h1>
+        <form id="resumeForm" action="/create_resume" method="POST">
+            <label for="name">Full Name</label>
+            <input type="text" id="name" name="name" placeholder="Enter your full name" required>
+
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" placeholder="Enter your email" required>
+
+            <label for="phone">Phone Number</label>
+            <input type="text" id="phone" name="phone" placeholder="Enter your phone number" required>
+
+            <label for="skills">Skills</label>
+            <textarea id="skills" name="skills" placeholder="Enter your skills (e.g., Python, Data Analysis)" rows="4" required></textarea>
+
+            <label for="experience">Work Experience</label>
+            <textarea id="experience" name="experience" placeholder="Enter your work experience (e.g., Job Title, Company, Responsibilities)" rows="6" required></textarea>
+
+            <label for="education">Education</label>
+            <textarea id="education" name="education" placeholder="Enter your educational qualifications (e.g., Degree, Institution, Year)" rows="4" required></textarea>
+
+            <label for="certifications">Certifications (Optional)</label>
+            <textarea id="certifications" name="certifications" placeholder="Enter any certifications (e.g., AWS Certified, PMP)" rows="3"></textarea>
+
+            <label for="achievements">Achievements (Optional)</label>
+            <textarea id="achievements" name="achievements" placeholder="Enter any achievements (e.g., Employee of the Month, Hackathon Winner)" rows="3"></textarea>
+
+            <button type="submit">Create Resume</button>
+        </form>
+    </div>
+
+    <!-- Popup -->
+    <div class="overlay" id="overlay"></div>
+    <div class="popup" id="popup">
+        <h2>Resume Created Successfully!</h2>
+        <p>Your resume has been created. You can now download it as a PDF.</p>
+        <a href="/download_resume" class="button">Download Resume</a>
+        <button onclick="closePopup()">Close</button>
+    </div>
+
+    <script>
+        const form = document.getElementById('resumeForm');
+        const popup = document.getElementById('popup');
+        const overlay = document.getElementById('overlay');
+
+        form.addEventListener('submit', function (event) {
+            event.preventDefault(); // Prevent form submission
+            // Simulate successful resume creation
+            popup.style.display = 'block';
+            overlay.style.display = 'block';
+        });
+
+        function closePopup() {
+            popup.style.display = 'none';
+            overlay.style.display = 'none';
+        }
+    </script>
+</body>
+</html>

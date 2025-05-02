@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Applied Applicants</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f9;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 50px auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            text-align: center;
+            color: #00796b;
+        }
+
+        .applicant {
+            margin-bottom: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+
+        .applicant h2 {
+            margin: 0;
+            color: #00796b;
+        }
+
+        .applicant p {
+            margin: 5px 0;
+        }
+
+        .applied-date {
+            font-size: 14px;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Applied Applicants</h1>
+        {% if applicants %}
+            {% for applicant in applicants %}
+                <div class="applicant">
+                    <h2>{{ applicant.applicant_name }}</h2>
+                    <p><strong>Email:</strong> {{ applicant.applicant_email }}</p>
+                    <p><strong>Internship Title:</strong> {{ applicant.internship_title }}</p>
+                    <p class="applied-date"><strong>Applied On:</strong> {{ applicant.applied_at.strftime('%d %B %Y, %I:%M %p') }}</p>
+                </div>
+            {% endfor %}
+        {% else %}
+            <p>No applicants have applied for your internships yet.</p>
+        {% endif %}
+    </div>
+</body>
+</html>
