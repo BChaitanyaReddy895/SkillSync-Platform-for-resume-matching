@@ -4,239 +4,147 @@ import nltk
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 import string
-import mysql.connector
-from werkzeug.security import generate_password_hash, check_password_hash
+from pymongo import MongoClient
+import urllib.parse
 import os
-import pdfkit  # Install using `pip install pdfkit`
-from werkzeug.utils import secure_filename
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
+# Configuration
 UPLOAD_FOLDER = 'static/uploads'
 ALLOWED_EXTENSIONS = {'pdf'}
-
-# Initialize Flask app
 app = Flask(__name__)
-app.secret_key = os.getenv('FLASK_SECRET_KEY', 'default_secret_key')  # Required for session management
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'default_secret_key')
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 # Download NLTK dependencies
 nltk.download('punkt')
 nltk.download('stopwords')
 
-# MySQL Database Connection
-def connect_db():
-    return mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="Chaitu895@",  # Change to your actual MySQL password
-        database="resume_internship_matching"
-    )
+# MongoDB Connection
+username = "root"
+password = "Chaitu895@"  # Replace with your actual password
+host = "cluster0.zklixmv.mongodb.net"
+database = "skillsync"
 
-# Function to convert skills to numerical vectors
-def skills_to_vector(skills):
-    vector = [0] * len(skill_to_index)  # Initialize a vector of zeros
-    for skill in skills.split():  # Split the string into individual skills
-        if skill in skill_to_index:
-            vector[skill_to_index[skill]] += 1  # Increment the count for the skill
-    return vector
+# URL-encode the username and password
+encoded_username = urllib.parse.quote_plus(username)
+encoded_password = urllib.parse.quote_plus(password)
 
-# Fetch data from MySQL
-def fetch_data():
-    conn = connect_db()
-    cursor = conn.cursor()
-
-    # Fetch resumes from resume_info table
-    cursor.execute("SELECT * FROM resume_info")
-    resumes = cursor.fetchall()
-    
-    # Get column names from MySQL tables
-    cursor.execute("SHOW COLUMNS FROM resume_info")
-    resume_columns = [column[0] for column in cursor.fetchall()]
-    
-    # Fetch internships
-    cursor.execute("SELECT * FROM internship_info")
-    internships = cursor.fetchall()
-    cursor.execute("SHOW COLUMNS FROM internship_info")
-    internship_columns = [column[0] for column in cursor.fetchall()]
-    
-    resume_info_df = pd.DataFrame(resumes, columns=resume_columns)
-    internship_df = pd.DataFrame(internships, columns=internship_columns)
-    
-    cursor.close()
-    conn.close()
-
-    # Preprocessing
-    resume_info_df.fillna('', inplace=True)
-    internship_df.fillna('', inplace=True)
-
-    resume_info_df['processed_Skills'] = resume_info_df['skills'].apply(preprocess_skills)
-    internship_df['processed_Required_Skills'] = internship_df['skills_required'].apply(preprocess_skills)
-
-    # Create a set of unique skills
-    all_skills = ' '.join(resume_info_df['processed_Skills']) + ' ' + ' '.join(internship_df['processed_Required_Skills'])
-    unique_skills = set(all_skills.split())  # Split the string into individual skills
-    global skill_to_index  # Declare as global so it can be used in other functions
-    skill_to_index = {skill: idx for idx, skill in enumerate(unique_skills)}  # Map each skill to an index
-
-    # Vectorization
-    resume_info_df['Skill_vector'] = resume_info_df['processed_Skills'].apply(skills_to_vector)
-    internship_df['Required_Skill_vector'] = internship_df['processed_Required_Skills'].apply(skills_to_vector)
-
-    return resume_info_df, internship_df
+# Construct the MongoDB URI
+MONGO_URI = f"mongodb+srv://{encoded_username}:{encoded_password}@{host}/{database}?retryWrites=true&w=majority&appName=Cluster0"
+client = MongoClient(MONGO_URI)
+db = client['skillsync']
 
 # Preprocessing function for skills
 def preprocess_skills(skills):
     if not isinstance(skills, str) or skills.strip() == '':
-        return ''
+        return []
     tokens = word_tokenize(skills.lower())
     tokens = [word for word in tokens if word not in stopwords.words('english') and word not in string.punctuation]
-    print(f"Original Skills: {skills} -> Processed Skills: {tokens}")  # Debugging
-    return ' '.join(tokens)  # Return a single string
+    return tokens
 
-# Load data from database
-resume_info_df, internship_df = fetch_data()
-
-# Function to calculate similarity
-def calculate_similarity(required_skills, applicant_skills):
-    if isinstance(required_skills, list):
-        required_skills = ' '.join(required_skills)
-    if isinstance(applicant_skills, list):
-        applicant_skills = ' '.join(applicant_skills)
-    print(f"Required Skills: {required_skills}, Applicant Skills: {applicant_skills}")  # Debugging
-    vectorizer = CountVectorizer().fit_transform([required_skills, applicant_skills])
-    vectors = vectorizer.toarray()
-    similarity = cosine_similarity(vectors)[0][1]
-    print(f"Similarity Score: {similarity}")  # Debugging
-    return similarity
-
-# Function to match internships
-def match_internships(resume):
-    results = []
-    for index, internship in internship_df.iterrows():
-        print(f"Internship: {internship}")  # Debugging
-        print(f"Resume: {resume}")  # Debugging
-        similarity_score = calculate_similarity(resume['processed_Skills'], internship['processed_Required_Skills'])
-        if similarity_score > 0:  # Include all matches with a similarity score greater than 0
-            results.append({
-                'internship_title': internship['role'],
-                'company': internship['company_name'],
-                'type_of_internship': internship['type_of_internship'],
-                'duration': internship['duration'],
-                'location': internship['location'],
-                'description': internship['description_of_internship'],
-                'skills_required': internship['skills_required'],
-                'salary': internship['expected_salary'],
-                'start_date': internship['start_date'],
-                'end_date': internship['end_date'],
-                'posted_date': internship['posted_date'],
-                'similarity_score': similarity_score * 100  # Convert to percentage
-            })
+# Fetch data from MongoDB
+def fetch_data():
+    # Fetch resumes
+    resumes = list(db.resume_info.find())
+    resume_df = pd.DataFrame(resumes)
     
-    # Sort by highest similarity score and return the top 5 results
-    results = sorted(results, key=lambda x: x['similarity_score'], reverse=True)[:5]
-    return results
+    # Fetch internships
+    internships = list(db.internship_info.find())
+    internship_df = pd.DataFrame(internships)
 
-# Function to match resumes with internships
-def match_resumes_with_internships():
-    results = []
+    # Debug: Check DataFrames
+    print("resume_df:", resume_df)
+    print("internship_df:", internship_df)
 
-    # Iterate through each internship
-    for _, internship in internship_df.iterrows():
-        internship_skills = internship['skills_required']
+    # Preprocessing
+    resume_df.fillna('', inplace=True)
+    internship_df.fillna('', inplace=True)
+    resume_df['processed_Skills'] = resume_df['skills'].apply(preprocess_skills)
+    internship_df['processed_Required_Skills'] = internship_df['skills_required'].apply(preprocess_skills)
 
-        # Iterate through each resume
-        for _, resume in resume_info_df.iterrows():  # Use resume_info_df instead of resume_df
-            resume_skills = resume['skills']
+    # Debug: Check processed skills
+    print("resume_df['processed_Skills']:", resume_df['processed_Skills'])
+    print("internship_df['processed_Required_Skills']:", internship_df['processed_Required_Skills'])
 
-            # Calculate similarity
-            similarity_score = calculate_similarity(internship_skills, resume_skills)
+    # Create a set of unique skills, handling empty cases
+    resume_skills = resume_df['processed_Skills'].explode().dropna().tolist()
+    internship_skills = internship_df['processed_Required_Skills'].explode().dropna().tolist()
+    all_skills = resume_skills + internship_skills
 
-            # If similarity score is greater than 0, add to results
-            if similarity_score > 0:
-                results.append({
-                    'internship_id': internship['id'],
-                    'internship_title': internship['role'],
-                    'company': internship['company_name'],
-                    'applicant_name': resume['name_of_applicant'],  # Updated column name
-                    'applicant_email': resume['email'],
-                    'similarity_score': round(similarity_score * 100, 2)  # Convert to percentage
-                })
+    # Debug: Check all_skills
+    print("all_skills:", all_skills)
 
-    # Sort results by similarity score in descending order
-    results = sorted(results, key=lambda x: x['similarity_score'], reverse=True)
+    global skill_to_index
+    skill_to_index = {skill: idx for idx, skill in enumerate(set(all_skills)) if all_skills}  # Avoid empty set
 
-    return results
+    # Vectorization
+    def skills_to_vector(skills):
+        vector = [0] * len(skill_to_index)
+        for skill in skills:
+            if skill in skill_to_index:
+                vector[skill_to_index[skill]] += 1
+        return vector
 
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    resume_df['Skill_vector'] = resume_df['processed_Skills'].apply(skills_to_vector)
+    internship_df['Required_Skill_vector'] = internship_df['processed_Required_Skills'].apply(skills_to_vector)
 
-# Flask Routes
+    return resume_df, internship_df
+
+# Load data after database initialization
+resume_df, internship_df = fetch_data()
+
+# Jaccard Similarity for matching
+def jaccard_similarity(vec1, vec2):
+    set1, set2 = set(vec1), set(vec2)
+    intersection = len(set1.intersection(set2))
+    union = len(set1.union(set2))
+    return intersection / union if union != 0 else 0
+
+# Routes
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/match', methods=['GET', 'POST'])
-def match():
-    if 'user_role' in session and session['user_role'] == 'intern':
-        applicant_name = session['user_name']
-        matching_resume = resume_info_df[resume_info_df['name_of_applicant'].str.contains(applicant_name, case=False)]
-        if matching_resume.empty:
-            flash("No resume found for the applicant.", "error")
-            return redirect(url_for('intern_dashboard'))
-        
-        resume = matching_resume.iloc[0]
-        results = match_internships(resume)  # Call the updated matching algorithm
-        return render_template('results.html', results=results, applicant_name=applicant_name)
-    else:
-        flash("Unauthorized access!", "error")
-        return redirect(url_for('login'))
-
 @app.route('/signup', methods=['GET', 'POST'])
 def signup():
     if request.method == 'POST':
-        
-        # Get form data
         name = request.form['name']
         email = request.form['email']
         password = request.form['password']
-        confirm_password = request.form['confirm_password']
-        role = request.form['role']  # Get the role from the form
+        role = request.form['role']
+        organization_name = request.form.get('organization_name', '')
+        contact_details = request.form.get('contact_details', '')
+        location = request.form.get('location', '')
+        website_link = request.form.get('website_link', '')
 
-        # Recruiter-specific fields
-        organization_name = request.form.get('organization_name', None)
-        contact_details = request.form.get('contact_details', None)
-        location = request.form.get('location', None)
-        website_link = request.form.get('website_link', None)
+        # Hash the password
+        from werkzeug.security import generate_password_hash
+        hashed_password = generate_password_hash(password, method='pbkdf2:sha256', salt_length=16)
 
-        # Validate passwords
-        if password != confirm_password:
-            flash("Passwords do not match!", "error")
+        # Check if email already exists
+        if db.users.find_one({"email": email}):
+            flash('Email already exists!', 'danger')
             return redirect(url_for('signup'))
 
-        # Hash the password for security
-        hashed_password = generate_password_hash(password, method='pbkdf2:sha256')
+        # Get the highest user_id and increment
+        max_user = db.users.find_one(sort=[("user_id", -1)])
+        new_user_id = (max_user['user_id'] + 1) if max_user and 'user_id' in max_user else 1
 
-        # Store user details in the database
-        try:
-            conn = connect_db()
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO users (name, email, password, role, organization_name, contact_details, location, website_link)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (name, email, hashed_password, role, organization_name, contact_details, location, website_link))
-            conn.commit()
-            cursor.close()
-            conn.close()
-            flash("Sign-up successful! Please log in.", "success")
-            return redirect(url_for('login'))
-        except mysql.connector.Error as err:
-            if err.errno == 1062:  # Duplicate entry error
-                flash("This email is already registered with us. Please use another email.", "error")
-            else:
-                flash("An error occurred while processing your request. Please try again.", "error")
-            return redirect(url_for('signup'))
-
+        # Insert new user
+        user = {
+            "user_id": new_user_id,
+            "name": name,
+            "email": email,
+            "password": hashed_password,
+            "role": role,
+            "organization_name": organization_name,
+            "contact_details": contact_details,
+            "location": location,
+            "website_link": website_link
+        }
+        db.users.insert_one(user)
+        flash('Signup successful! Please login.', 'success')
+        return redirect(url_for('login'))
     return render_template('signup.html')
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -245,493 +153,384 @@ def login():
         email = request.form['email']
         password = request.form['password']
 
-        try:
-            conn = connect_db()
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
-            user = cursor.fetchone()
-            cursor.close()
-            conn.close()
+        from werkzeug.security import check_password_hash
+        user = db.users.find_one({"email": email})
 
-            if user and check_password_hash(user['password'], password):
-                session['user_id'] = user['id']
-                session['user_name'] = user['name']
-                session['user_role'] = user['role']  # Store the user's role in the session
-                session['organization_name'] = user.get('organization_name', None)
-                session['email'] = user.get('email', None)
-                flash("Login successful!", "success")
-
-                # Redirect to the appropriate dashboard
-                if user['role'] == 'intern':
-                    return redirect(url_for('intern_dashboard'))
-                elif user['role'] == 'recruiter':
-                    return redirect(url_for('recruiter_dashboard'))
+        if user and check_password_hash(user['password'], password):
+            session['user_id'] = user['user_id']
+            session['role'] = user['role']
+            flash('Login successful!', 'success')
+            if user['role'] == 'intern':
+                return redirect(url_for('intern_dashboard'))
             else:
-                flash("Invalid email or password!", "error")
-                return redirect(url_for('login'))
-        except mysql.connector.Error as err:
-            flash(f"Error: {err}", "error")
-            return redirect(url_for('login'))
-
+                return redirect(url_for('recruiter_dashboard'))
+        else:
+            flash('Invalid email or password!', 'danger')
     return render_template('login.html')
 
 @app.route('/logout')
 def logout():
-    session.clear()  # Clear the session
-    flash("You have been logged out.", "success")
+    session.pop('user_id', None)
+    session.pop('role', None)
+    flash('Logged out successfully!', 'success')
     return redirect(url_for('index'))
 
 @app.route('/intern_dashboard')
 def intern_dashboard():
-    if 'user_role' in session and session['user_role'] == 'intern':
-        applicant_name = session.get('user_name', '')
-        print(f"Logged-in Intern: {applicant_name}")  # Debugging
-
-        # Fetch the resume for the logged-in user
-        matching_resume = resume_info_df[resume_info_df['name_of_applicant'].str.contains(applicant_name, case=False)]
-        print(f"Matching Resume: {matching_resume}")  # Debugging
-
-        if matching_resume.empty:
-            flash("No resume found for the applicant. Please create one.", "error")
-            return redirect(url_for('create_resume'))
-        
-        resume = matching_resume.iloc[0]  # Get the first matching resume row
-        matched_internships = match_internships(resume)  # Pass the resume row to the function
-        return render_template('intern_dashboard.html', user_name=applicant_name, matched_internships=matched_internships)
-    else:
-        flash("Unauthorized access!", "error")
+    if 'user_id' not in session or session['role'] != 'intern':
+        flash('Please login as an intern!', 'danger')
         return redirect(url_for('login'))
 
-@app.route('/recruiter_dashboard')
-def recruiter_dashboard():
-    if 'user_role' in session and session['user_role'] == 'recruiter':
-        try:
-            conn = connect_db()
-            cursor = conn.cursor(dictionary=True)
+    user_id = session['user_id']
+    resume = db.resume_info.find_one({"user_id": user_id})
 
-            # Fetch recruiter details
-            cursor.execute("SELECT * FROM users WHERE id = %s", (session['user_id'],))
-            recruiter = cursor.fetchone()
+    if not resume:
+        flash('Please create your resume first!', 'warning')
+        return redirect(url_for('create_resume'))
 
-            # Fetch internships posted by the recruiter
-            cursor.execute("""
-                SELECT id, role, description_of_internship
-                FROM internship_info
-                WHERE company_name = %s
-            """, (recruiter['organization_name'],))
-            internships = cursor.fetchall()
+    user_skills = preprocess_skills(resume['skills'])
+    user_vector = [0] * len(skill_to_index)
+    for skill in user_skills:
+        if skill in skill_to_index:
+            user_vector[skill_to_index[skill]] = 1
 
-            cursor.close()
-            conn.close()
+    internships = []
+    for idx, internship in internship_df.iterrows():
+        similarity = jaccard_similarity(user_vector, internship['Required_Skill_vector'])
+        if similarity > 0:
+            internships.append({
+                'id': internship['id'],
+                'role': internship['role'],
+                'company_name': internship['company_name'],
+                'similarity': similarity
+            })
 
-            return render_template('recruiter_dashboard.html', recruiter=recruiter, internships=internships)
-        except mysql.connector.Error as err:
-            flash(f"Error: {err}", "error")
-            return redirect(url_for('login'))
-    else:
-        flash("Unauthorized access!", "error")
-        return redirect(url_for('login'))
+    internships = sorted(internships, key=lambda x: x['similarity'], reverse=True)
+    return render_template('intern_dashboard.html', internships=internships)
 
 @app.route('/create_resume', methods=['GET', 'POST'])
 def create_resume():
-    if 'user_role' in session and session['user_role'] == 'intern':
-        if request.method == 'POST':
-            # Get resume details from the form
-            name = request.form['name']
-            email = request.form['email']
-            phone = request.form['phone']
-            skills = request.form['skills']
-            experience = request.form['experience']
-            education = request.form['education']
-            certifications = request.form.get('certifications', '')
-            achievements = request.form.get('achievements', '')
-            downloaded = False  # Initially, the resume is not downloaded
-
-            # Save resume details to the database
-            try:
-                conn = connect_db()
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT INTO resume_info (user_id, name_of_applicant, email, phone_number, skills, experience, education, certifications, achievements, downloaded)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (session['user_id'], name, email, phone, skills, experience, education, certifications, achievements, downloaded)
-                )
-                conn.commit()
-                cursor.close()
-                conn.close()
-                flash("Resume created successfully!", "success")
-                return redirect(url_for('intern_dashboard'))
-            except mysql.connector.Error as err:
-                flash(f"Error: {err}", "error")
-                return redirect(url_for('create_resume'))
-
-        return render_template('create_resume.html')
-    else:
-        flash("Unauthorized access!", "error")
+    if 'user_id' not in session or session['role'] != 'intern':
+        flash('Please login as an intern!', 'danger')
         return redirect(url_for('login'))
+
+    if request.method == 'POST':
+        name = request.form['name']
+        email = request.form['email']
+        phone = request.form['phone']
+        skills = request.form['skills']
+        experience = request.form['experience']
+        education = request.form['education']
+        certifications = request.form['certifications']
+        achievements = request.form['achievements']
+        user_id = session['user_id']
+
+        resume = {
+            "user_id": user_id,
+            "name_of_applicant": name,
+            "email": email,
+            "phone_number": phone,
+            "skills": skills,
+            "experience": experience,
+            "education": education,
+            "certifications": certifications,
+            "achievements": achievements,
+            "downloaded": 0
+        }
+        db.resume_info.insert_one(resume)
+        flash('Resume created successfully!', 'success')
+        return redirect(url_for('intern_dashboard'))
+    return render_template('create_resume.html')
 
 @app.route('/edit_resume', methods=['GET', 'POST'])
 def edit_resume():
-    if 'user_role' in session and session['user_role'] == 'intern':
-        if request.method == 'POST':
-            # Update resume details in the database
-            resume_id = request.form['resume_id']
-            name = request.form['name']
-            email = request.form['email']
-            phone = request.form['phone']
-            skills = request.form['skills']
-            experience = request.form['experience']
-            education = request.form['education']
-            certifications = request.form.get('certifications', '')
-            achievements = request.form.get('achievements', '')
-
-            try:
-                conn = connect_db()
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    UPDATE resumes
-                    SET name=%s, email=%s, phone=%s, skills=%s, experience=%s, education=%s, certifications=%s, achievements=%s
-                    WHERE id=%s AND user_id=%s
-                    """,
-                    (name, email, phone, skills, experience, education, certifications, achievements, resume_id, session['user_id'])
-                )
-                conn.commit()
-                cursor.close()
-                conn.close()
-                flash("Resume updated successfully!", "success")
-                return redirect(url_for('intern_dashboard'))
-            except mysql.connector.Error as err:
-                flash(f"Error: {err}", "error")
-                return redirect(url_for('edit_resume'))
-
-        # Fetch the user's resume details to pre-fill the form
-        try:
-            conn = connect_db()
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("SELECT * FROM resumes WHERE user_id = %s", (session['user_id'],))
-            resume = cursor.fetchone()
-            cursor.close()
-            conn.close()
-            return render_template('edit_resume.html', resume=resume)
-        except mysql.connector.Error as err:
-            flash(f"Error: {err}", "error")
-            return redirect(url_for('intern_dashboard'))
-    else:
-        flash("Unauthorized access!", "error")
+    if 'user_id' not in session or session['role'] != 'intern':
+        flash('Please login as an intern!', 'danger')
         return redirect(url_for('login'))
+
+    user_id = session['user_id']
+    resume = db.resume_info.find_one({"user_id": user_id})
+
+    if not resume:
+        flash('Please create your resume first!', 'warning')
+        return redirect(url_for('create_resume'))
+
+    if request.method == 'POST':
+        name = request.form['name']
+        email = request.form['email']
+        phone = request.form['phone']
+        skills = request.form['skills']
+        experience = request.form['experience']
+        education = request.form['education']
+        certifications = request.form['certifications']
+        achievements = request.form['achievements']
+
+        db.resume_info.update_one(
+            {"user_id": user_id},
+            {"$set": {
+                "name_of_applicant": name,
+                "email": email,
+                "phone_number": phone,
+                "skills": skills,
+                "experience": experience,
+                "education": education,
+                "certifications": certifications,
+                "achievements": achievements
+            }}
+        )
+        flash('Resume updated successfully!', 'success')
+        return redirect(url_for('intern_dashboard'))
+
+    return render_template('edit_resume.html', resume=resume)
 
 @app.route('/download_resume')
 def download_resume():
-    if 'user_id' not in session:
-        flash("Unauthorized access!", "error")
+    if 'user_id' not in session or session['role'] != 'intern':
+        flash('Please login as an intern!', 'danger')
         return redirect(url_for('login'))
 
-    try:
-        # Fetch the user's resume details from the database
-        conn = connect_db()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM resumes WHERE user_id = %s", (session['user_id'],))
-        resume = cursor.fetchone()
-        cursor.close()
-        conn.close()
+    user_id = session['user_id']
+    resume = db.resume_info.find_one({"user_id": user_id})
 
-        if not resume:
-            flash("No resume found for the user.", "error")
-            return redirect(url_for('intern_dashboard'))
+    if not resume:
+        flash('No resume found!', 'danger')
+        return redirect(url_for('create_resume'))
 
-        # Generate the HTML content for the PDF
-        html = f"""
-        <html>
-        <head>
-            <style>
-                body {{
-                    font-family: Arial, sans-serif;
-                    margin: 0;
-                    padding: 20px;
-                }}
-                h1 {{
-                    color: #00796b;
-                }}
-                .section {{
-                    margin-bottom: 20px;
-                }}
-                .section h2 {{
-                    color: #005a4f;
-                    border-bottom: 2px solid #00796b;
-                    padding-bottom: 5px;
-                }}
-                .section p {{
-                    margin: 5px 0;
-                }}
-            </style>
-        </head>
-        <body>
-            <h1>{resume['name']}'s Resume</h1>
-            <div class="section">
-                <h2>Contact Information</h2>
-                <p><strong>Email:</strong> {resume['email']}</p>
-                <p><strong>Phone:</strong> {resume.get('phone', 'N/A')}</p>
-            </div>
-            <div class="section">
-                <h2>Skills</h2>
-                <p>{resume['skills']}</p>
-            </div>
-            <div class="section">
-                <h2>Work Experience</h2>
-                <p>{resume['experience']}</p>
-            </div>
-            <div class="section">
-                <h2>Education</h2>
-                <p>{resume['education']}</p>
-            </div>
-            <div class="section">
-                <h2>Certifications</h2>
-                <p>{resume.get('certifications', 'N/A')}</p>
-            </div>
-            <div class="section">
-                <h2>Achievements</h2>
-                <p>{resume.get('achievements', 'N/A')}</p>
-            </div>
-        </body>
-        </html>
-        """
+    db.resume_info.update_one({"user_id": user_id}, {"$set": {"downloaded": 1}})
 
-        # Generate the PDF
-        pdf_path = 'resume.pdf'
-        pdfkit.from_string(html, pdf_path)
+    # Render as HTML since pdfkit may not work on Hugging Face Spaces
+    return render_template('resume_template.html', resume=resume)
 
-        # Update the downloaded status in the database
-        conn = connect_db()
-        cursor = conn.cursor()
-        cursor.execute("UPDATE resumes SET downloaded = TRUE WHERE user_id = %s", (session['user_id'],))
-        conn.commit()
-        cursor.close()
-        conn.close()
+@app.route('/apply_internship/<int:internship_id>', methods=['POST'])
+def apply_internship(internship_id):
+    if 'user_id' not in session or session['role'] != 'intern':
+        flash('Please login as an intern!', 'danger')
+        return redirect(url_for('login'))
 
-        # Serve the PDF file
-        return send_file(pdf_path, as_attachment=True)
-
-    except mysql.connector.Error as err:
-        flash(f"Error: {err}", "error")
+    user_id = session['user_id']
+    # Check if the user has already applied
+    existing_application = db.applications.find_one({"user_id": user_id, "internship_id": internship_id})
+    if existing_application:
+        flash('You have already applied to this internship!', 'warning')
         return redirect(url_for('intern_dashboard'))
 
-@app.route('/apply_internship', methods=['POST'])
-def apply_internship():
-    if 'user_id' not in session:
-        flash("Unauthorized access!", "error")
-        return redirect(url_for('login'))
-
-    internship_id = request.form.get('internship_id')
-    print(f"Received internship_id: {internship_id}")  # Debugging statement
-
-    if not internship_id:
-        flash("Invalid internship ID.", "error")
-        return redirect(url_for('match'))
-
-    try:
-        # Save the application to the database
-        conn = connect_db()
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO applications (user_id, internship_id) VALUES (%s, %s)",
-            (session['user_id'], internship_id)
-        )
-        conn.commit()
-        cursor.close()
-        conn.close()
-
-        flash("You have successfully applied for the internship!", "success")
-        return redirect(url_for('match'))
-    except mysql.connector.IntegrityError:
-        flash("You have already applied for this internship.", "error")
-        return redirect(url_for('match'))
-    except mysql.connector.Error as err:
-        flash(f"Error: {err}", "error")
-        return redirect(url_for('match'))
+    application = {
+        "user_id": user_id,
+        "internship_id": internship_id,
+        "applied_at": pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    db.applications.insert_one(application)
+    flash('Applied successfully!', 'success')
+    return redirect(url_for('intern_dashboard'))
 
 @app.route('/applied_internships')
 def applied_internships():
-    if 'user_id' not in session:
-        flash("Unauthorized access!", "error")
+    if 'user_id' not in session or session['role'] != 'intern':
+        flash('Please login as an intern!', 'danger')
         return redirect(url_for('login'))
 
-    try:
-        # Fetch the list of applied internships for the logged-in user
-        conn = connect_db()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("""
-            SELECT internship_info.role AS internship_title,
-                   internship_info.company_name AS company,
-                   internship_info.type_of_internship,
-                   internship_info.location,
-                   internship_info.description_of_internship,
-                   applications.applied_at
-            FROM applications
-            JOIN internship_info ON applications.internship_id = internship_info.id
-            WHERE applications.user_id = %s
-            ORDER BY applications.applied_at DESC
-        """, (session['user_id'],))
-        applied_internships = cursor.fetchall()
-        cursor.close()
-        conn.close()
+    user_id = session['user_id']
+    applications = list(db.applications.find({"user_id": user_id}))
+    internship_ids = [app['internship_id'] for app in applications]
+    internships = list(db.internship_info.find({"id": {"$in": internship_ids}}))
+    return render_template('applied_internships.html', internships=internships)
 
-        return render_template('applied_internships.html', applied_internships=applied_internships)
-    except mysql.connector.Error as err:
-        flash(f"Error: {err}", "error")
-        return redirect(url_for('intern_dashboard'))
+@app.route('/recruiter_dashboard')
+def recruiter_dashboard():
+    if 'user_id' not in session or session['role'] != 'recruiter':
+        flash('Please login as a recruiter!', 'danger')
+        return redirect(url_for('login'))
+
+    user_id = session['user_id']
+    internships = list(db.internship_info.find({"user_id": user_id}))
+    return render_template('recruiter_dashboard.html', internships=internships)
 
 @app.route('/register_internship', methods=['GET', 'POST'])
 def register_internship():
-    if 'user_role' in session and session['user_role'] == 'recruiter':
-        if request.method == 'POST':
-            # Get internship details from the form
-            role = request.form['role']
-            description_of_internship = request.form['description_of_internship']
-            start_date = request.form['start_date']
-            end_date = request.form['end_date']
-            duration = request.form['duration']
-            type_of_internship = request.form['type_of_internship']
-            skills_required = request.form['skills_required']
-            location = request.form['location']
-            years_of_experience = request.form['years_of_experience']
-            phone_number = request.form['phone_number']
+    if 'user_id' not in session or session['role'] != 'recruiter':
+        flash('Please login as a recruiter!', 'danger')
+        return redirect(url_for('login'))
 
-            # Validate phone number length
-            if len(phone_number) > 20:
-                flash("Phone number is too long. Please enter a valid phone number.", "error")
-                return redirect(url_for('register_internship'))
+    user_id = session['user_id']
+    # Fetch recruiter details to display in the template
+    recruiter = db.users.find_one({"user_id": user_id})
+    if not recruiter:
+        flash('Recruiter profile not found!', 'danger')
+        return redirect(url_for('login'))
 
-            try:
-                # Save internship details to the database
-                conn = connect_db()
-                cursor = conn.cursor()
-                cursor.execute("""
-                    INSERT INTO internship_info (role, description_of_internship, start_date, end_date, duration, type_of_internship, skills_required, location, years_of_experience, phone_number, company_name, company_mail)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (role, description_of_internship, start_date, end_date, duration, type_of_internship, skills_required, location, years_of_experience, phone_number, session['organization_name'], session['email']))
-                conn.commit()
-                cursor.close()
-                conn.close()
+    if request.method == 'POST':
+        role = request.form['role']
+        description = request.form['description_of_internship']
+        start_date = request.form['start_date']
+        end_date = request.form['end_date']
+        duration = request.form['duration']
+        type_of_internship = request.form['type_of_internship']
+        skills_required = request.form['skills_required']
+        location = request.form['location']
+        years_of_experience = int(request.form['years_of_experience'])
+        phone_number = request.form['phone_number']
 
-                flash("Internship registered successfully!", "success")
-                return redirect(url_for('recruiter_dashboard'))
-            except mysql.connector.Error as err:
-                flash(f"Error: {err}", "error")
-                return redirect(url_for('register_internship'))
+        # Fetch company details from the recruiter's profile
+        company_name = recruiter.get('organization_name', '')
+        company_mail = recruiter.get('email', '')
 
-        # Fetch recruiter details to pre-fill the form
-        try:
-            conn = connect_db()
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("SELECT * FROM users WHERE id = %s", (session['user_id'],))
-            recruiter = cursor.fetchone()
-            cursor.close()
-            conn.close()
+        # Basic validation
+        if not role or not description or not start_date or not end_date or not duration or not type_of_internship or not skills_required or not location or not phone_number:
+            flash('All required fields must be filled!', 'danger')
             return render_template('register_internship.html', recruiter=recruiter)
-        except mysql.connector.Error as err:
-            flash(f"Error: {err}", "error")
-            return redirect(url_for('recruiter_dashboard'))
-    else:
-        flash("Unauthorized access!", "error")
-        return redirect(url_for('login'))
 
-@app.route('/applied_applicants')
-def applied_applicants():
-    if 'user_role' in session and session['user_role'] == 'recruiter':
+        # Validate dates
+        from datetime import datetime
         try:
-            # Fetch applicants for internships posted by the recruiter
-            conn = connect_db()
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("""
-                SELECT users.name AS applicant_name,
-                       users.email AS applicant_email,
-                       internship_info.role AS internship_title,
-                       applications.applied_at
-                FROM applications
-                JOIN internship_info ON applications.internship_id = internship_info.id
-                JOIN users ON applications.user_id = users.id
-                WHERE internship_info.company_name = %s
-                ORDER BY applications.applied_at DESC
-            """, (session['user_name'],))
-            applicants = cursor.fetchall()
-            cursor.close()
-            conn.close()
+            start = datetime.strptime(start_date, '%Y-%m-%d')
+            end = datetime.strptime(end_date, '%Y-%m-%d')
+            if end <= start:
+                flash('End date must be after start date!', 'danger')
+                return render_template('register_internship.html', recruiter=recruiter)
+        except ValueError:
+            flash('Invalid date format!', 'danger')
+            return render_template('register_internship.html', recruiter=recruiter)
 
-            return render_template('applied_applicants.html', applicants=applicants)
-        except mysql.connector.Error as err:
-            flash(f"Error: {err}", "error")
-            return redirect(url_for('recruiter_dashboard'))
-    else:
-        flash("Unauthorized access!", "error")
+        # Validate phone number (basic regex for format like +1-800-555-1234)
+        import re
+        phone_pattern = r'^\+\d{1,3}-\d{3}-\d{3}-\d{4}$'
+        if not re.match(phone_pattern, phone_number):
+            flash('Phone number must be in the format +1-800-555-1234!', 'danger')
+            return render_template('register_internship.html', recruiter=recruiter)
+
+        # Get the highest internship_id and increment
+        max_internship = db.internship_info.find_one(sort=[("id", -1)])
+        new_internship_id = (max_internship['id'] + 1) if max_internship and 'id' in max_internship else 1
+
+        # Insert internship
+        internship = {
+            "id": new_internship_id,
+            "role": role,
+            "description_of_internship": description,
+            "start_date": start_date,
+            "end_date": end_date,
+            "duration": duration,
+            "type_of_internship": type_of_internship,
+            "skills_required": skills_required,
+            "location": location,
+            "years_of_experience": years_of_experience,
+            "phone_number": phone_number,
+            "company_name": company_name,
+            "company_mail": company_mail,
+            "user_id": user_id,
+            "posted_date": pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
+            "expected_salary": ""  # Not in form, set as empty
+        }
+        db.internship_info.insert_one(internship)
+        flash('Internship registered successfully!', 'success')
+        return redirect(url_for('recruiter_dashboard'))
+
+    return render_template('register_internship.html', recruiter=recruiter)
+
+@app.route('/applied_applicants/<int:internship_id>')
+def applied_applicants(internship_id):
+    if 'user_id' not in session or session['role'] != 'recruiter':
+        flash('Please login as a recruiter!', 'danger')
         return redirect(url_for('login'))
+
+    applications = list(db.applications.find({"internship_id": internship_id}))
+    user_ids = [app['user_id'] for app in applications]
+    applicants = []
+    for user_id in user_ids:
+        resume = db.resume_info.find_one({"user_id": user_id})
+        user = db.users.find_one({"user_id": user_id})
+        if resume and user:
+            applicants.append({
+                "name_of_applicant": resume['name_of_applicant'],
+                "email": user['email'],
+                "skills": resume['skills'],
+                "experience": resume['experience'],
+                "education": resume['education']
+            })
+    internship = db.internship_info.find_one({"id": internship_id})
+    return render_template('applied_applicants.html', applicants=applicants, internship=internship)
 
 @app.route('/top_matched_applicants/<int:internship_id>')
 def top_matched_applicants(internship_id):
-    if 'user_role' in session and session['user_role'] == 'recruiter':
-        try:
-            # Fetch the internship details
-            internship = internship_df[internship_df['id'] == internship_id].iloc[0]
-            required_skills = internship['processed_Required_Skills']
-
-            # Fetch all applicants and calculate similarity scores
-            matched_applicants = []
-            for _, resume in resume_info_df.iterrows():
-                similarity_score = calculate_similarity(required_skills, resume['processed_Skills'])
-                if similarity_score > 0:
-                    matched_applicants.append({
-                        'name': resume['name_of_applicant'],
-                        'email': resume['email'],
-                        'skills': resume['skills'],
-                        'similarity_score': round(similarity_score * 100, 2)  # Convert to percentage
-                    })
-
-            # Sort applicants by similarity score in descending order
-            matched_applicants = sorted(matched_applicants, key=lambda x: x['similarity_score'], reverse=True)[:5]
-
-            return render_template('top_matched_applicants.html', internship_title=internship['role'], matched_applicants=matched_applicants)
-
-        except Exception as e:
-            flash(f"Error: {e}", "error")
-            return redirect(url_for('recruiter_dashboard'))
-    else:
-        flash("Unauthorized access!", "error")
+    if 'user_id' not in session or session['role'] != 'recruiter':
+        flash('Please login as a recruiter!', 'danger')
         return redirect(url_for('login'))
+
+    internship = internship_df[internship_df['id'] == internship_id].iloc[0]
+    internship_vector = internship['Required_Skill_vector']
+
+    applicants = []
+    for idx, resume in resume_df.iterrows():
+        similarity = jaccard_similarity(resume['Skill_vector'], internship_vector)
+        if similarity > 0:
+            user = db.users.find_one({"user_id": resume['user_id']})
+            if user:
+                applicants.append({
+                    'name': resume['name_of_applicant'],
+                    'email': user['email'],
+                    'similarity': similarity
+                })
+
+    applicants = sorted(applicants, key=lambda x: x['similarity'], reverse=True)[:5]
+    return render_template('top_matched_applicants.html', applicants=applicants, internship_id=internship_id)
+
+@app.route('/edit_profile', methods=['GET', 'POST'])
+def edit_profile():
+    if 'user_id' not in session:
+        flash('Please login!', 'danger')
+        return redirect(url_for('login'))
+
+    user_id = session['user_id']
+    user = db.users.find_one({"user_id": user_id})
+
+    if request.method == 'POST':
+        name = request.form['name']
+        email = request.form['email']
+        db.users.update_one(
+            {"user_id": user_id},
+            {"$set": {"name": name, "email": email}}
+        )
+        flash('Profile updated successfully!', 'success')
+        return redirect(url_for('intern_dashboard' if session['role'] == 'intern' else 'recruiter_dashboard'))
+
+    return render_template('edit_profile.html', user=user)
 
 @app.route('/edit_organization_profile', methods=['GET', 'POST'])
 def edit_organization_profile():
-    if 'user_role' in session and session['user_role'] == 'recruiter':
-        if request.method == 'POST':
-            # Update organization profile details
-            organization_name = request.form['organization_name']
-            email = request.form['email']
-            phone_number = request.form['phone_number']
-
-            try:
-                conn = connect_db()
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE users
-                    SET name = %s, email = %s, phone_number = %s
-                    WHERE id = %s
-                """, (organization_name, email, phone_number, session['user_id']))
-                conn.commit()
-                cursor.close()
-                conn.close()
-
-                flash("Organization profile updated successfully!", "success")
-                return redirect(url_for('recruiter_dashboard'))
-            except mysql.connector.Error as err:
-                flash(f"Error: {err}", "error")
-                return redirect(url_for('edit_organization_profile'))
-
-        return render_template('edit_organization_profile.html')
-    else:
-        flash("Unauthorized access!", "error")
+    if 'user_id' not in session or session['role'] != 'recruiter':
+        flash('Please login as a recruiter!', 'danger')
         return redirect(url_for('login'))
 
-# Run Flask app
+    user_id = session['user_id']
+    user = db.users.find_one({"user_id": user_id})
+
+    if request.method == 'POST':
+        organization_name = request.form['organization_name']
+        contact_details = request.form['contact_details']
+        location = request.form['location']
+        website_link = request.form['website_link']
+        db.users.update_one(
+            {"user_id": user_id},
+            {"$set": {
+                "organization_name": organization_name,
+                "contact_details": contact_details,
+                "location": location,
+                "website_link": website_link
+            }}
+        )
+        flash('Organization profile updated successfully!', 'success')
+        return redirect(url_for('recruiter_dashboard'))
+
+    return render_template('edit_organization_profile.html', user=user)
+
+@app.route('/results')
+def results():
+    return render_template('results.html')
+
+@app.teardown_appcontext
+def close_db(exception):
+    client.close()
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+    app.run(debug=True, host='0.0.0.0', port=5000)
